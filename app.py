@@ -1,46 +1,56 @@
 import streamlit as st
 import requests
 import pandas as pd
+import json
+import os
 from datetime import datetime, timezone
 
 # -------------------- [설정] --------------------
 st.set_page_config(page_title="메이플랜드 시세", page_icon="🍁")
 st.title("🍁 메이플랜드 시세 검색기")
-st.caption("모바일 최적화 버전 (삽니다 매물 검색)")
+st.caption("차단 우회 버전 (파일 로드 방식)")
 
 # -------------------- [데이터 로직] --------------------
 @st.cache_data
 def initialize_item_db():
-    # Streamlit Cloud 서버가 차단당했을 경우를 대비해 예외 처리를 강화합니다.
-    url = "https://mapleland.gg/api/items?v=260112"
+    # [변경점] URL 다운로드 대신, 같이 업로드한 items.json 파일을 읽습니다.
+    file_path = "items.json"
+    
+    if not os.path.exists(file_path):
+        return {}, "파일 없음 (items.json을 GitHub에 올려주세요)"
+    
     try:
-        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        if response.status_code == 200:
-            items = response.json()
-            item_map = {}
-            for item in items:
-                name = item.get('name') or item.get('itemName')
-                code = item.get('code') or item.get('itemCode') or item.get('id')
-                if name and code:
-                    item_map[name] = code
-            return item_map, "성공"
-        else:
-            return {}, f"서버 차단됨 (상태코드: {response.status_code})"
+        with open(file_path, "r", encoding="utf-8") as f:
+            items = json.load(f)
+            
+        item_map = {}
+        for item in items:
+            name = item.get('name') or item.get('itemName')
+            code = item.get('code') or item.get('itemCode') or item.get('id')
+            if name and code:
+                item_map[name] = code
+        return item_map, "성공"
+        
     except Exception as e:
-        return {}, f"에러 발생: {str(e)}"
+        return {}, f"파일 읽기 에러: {str(e)}"
 
 def get_market_price(item_code):
     url = f"https://api.mapleland.gg/trade?itemCode={item_code}"
+    # 헤더를 최대한 실제 브라우저처럼 위장합니다.
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://mapleland.gg/",
-        "Origin": "https://mapleland.gg"
+        "Origin": "https://mapleland.gg",
+        "Accept": "application/json, text/plain, */*"
     }
     try:
         res = requests.get(url, headers=headers, timeout=5)
-        return res.json() if res.status_code == 200 else []
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return None # 에러 발생 시 None 반환
     except:
-        return []
+        return None
 
 def format_data(data_list):
     results = []
@@ -66,56 +76,39 @@ def format_data(data_list):
 
 # -------------------- [화면 UI] --------------------
 
-# 1. 데이터 로드 상태 확인
-with st.spinner('서버 연결 중...'):
-    item_map, status = initialize_item_db()
+item_map, status = initialize_item_db()
 
-# 디버깅 정보 (문제가 생기면 화면에 이유가 뜹니다)
 if not item_map:
-    st.error(f"⚠️ 아이템 목록을 불러오지 못했습니다.\n원인: {status}")
-    st.info("해결책: PC에서 'items.json' 파일을 만들어 GitHub에 함께 올려야 합니다.")
+    st.error(f"⚠️ 아이템 목록 로드 실패: {status}")
     st.stop()
-else:
-    # 정상적으로 로드되면 몇 개인지 작게 표시
-    st.toast(f"✅ {len(item_map)}개 아이템 로드 완료!")
 
-# 2. 검색창 (Selectbox 대신 Text Input 사용 -> 모바일 렉 해결)
-keyword = st.text_input("검색할 아이템 이름 (예: 장공, 일비)", placeholder="입력 후 Enter를 누르세요")
+# 검색창
+keyword = st.text_input("검색할 아이템 (예: 장공)", placeholder="입력 후 Enter")
 
 if keyword:
-    # 입력한 단어가 포함된 아이템 찾기
     candidates = {name: code for name, code in item_map.items() if keyword.replace(" ", "") in name.replace(" ", "")}
     
     if not candidates:
-        st.warning("❌ 검색 결과가 없습니다. 이름을 다시 확인해주세요.")
-    
+        st.warning("❌ 검색 결과가 없습니다.")
     elif len(candidates) > 10:
-        st.warning(f"🔍 '{keyword}' 관련 아이템이 너무 많습니다 ({len(candidates)}개). 더 정확하게 입력해주세요.")
-    
+        st.warning(f"🔍 너무 많은 결과 ({len(candidates)}개). 더 구체적으로 입력하세요.")
     else:
-        # 검색 결과가 1개 이상이면 버튼으로 선택하게 함
-        st.success(f"총 {len(candidates)}개의 아이템을 찾았습니다.")
+        st.success(f"아이템 {len(candidates)}개 발견")
         
-        # 탭으로 결과를 나눠서 보여줌
-        tabs = st.tabs(list(candidates.keys()))
-        
-        for i, (name, code) in enumerate(candidates.items()):
-            with tabs[i]:
-                st.write(f"**[{name}]** 매물을 조회합니다...")
+        for name, code in candidates.items():
+            with st.expander(f"📌 {name} 시세 보기", expanded=True):
                 raw_data = get_market_price(code)
                 
-                if raw_data:
+                if raw_data is None:
+                    st.error(f"⛔ 거래 데이터 조회 실패 (서버 차단됨)")
+                    st.caption("해결책: 이 기능은 PC(로컬)에서만 작동할 수 있습니다.")
+                elif not raw_data:
+                    st.info("데이터가 비어있습니다.")
+                else:
                     df = format_data(raw_data)
                     if not df.empty:
                         df = df.sort_values(by='raw_time', ascending=True)
-                        max_price = df.iloc[0]['가격']
-                        st.metric(label="최고 매입가", value=f"{max_price:,} 메소")
-                        st.dataframe(
-                            df[['구매자', '가격', '수량', '메시지', '시간']], 
-                            hide_index=True, 
-                            use_container_width=True
-                        )
+                        st.metric("최고 매입가", f"{df.iloc[0]['가격']:,} 메소")
+                        st.dataframe(df[['구매자', '가격', '수량', '메시지', '시간']], hide_index=True, use_container_width=True)
                     else:
-                        st.info("현재 '삽니다' 매물이 없습니다.")
-                else:
-                    st.warning("데이터 조회 실패")
+                        st.info("매물이 없습니다.")
