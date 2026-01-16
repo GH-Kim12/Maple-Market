@@ -83,7 +83,55 @@ if not item_map:
     st.stop()
 
 # 검색창
-keyword = st.text_input("검색할 아이템 (예: 장공)", placeholder="입력 후 Enter")
+# -------------------- [화면 UI] --------------------
+
+item_map, status = initialize_item_db()
+
+if not item_map:
+    st.error(f"⚠️ 아이템 목록 로드 실패: {status}")
+    st.stop()
+
+# ✅ 여기가 수정된 부분입니다 (자동완성 기능 부활)
+# 텍스트 입력 대신 '선택 상자'를 사용하여 목록에서 고를 수 있게 합니다.
+selected_item = st.selectbox(
+    "검색할 아이템 선택",
+    options=list(item_map.keys()), # 전체 아이템 목록을 넣습니다
+    index=None,                    # 처음엔 아무것도 선택 안 된 상태
+    placeholder="여기에 아이템 이름을 입력하거나 선택하세요 (예: 장공)"
+)
+
+if selected_item:
+    code = item_map[selected_item]
+    
+    st.divider()
+    st.subheader(f"📢 {selected_item} 구매 희망 목록")
+    
+    with st.spinner('매물 조회 중...'):
+        raw_data = get_market_price(code)
+        
+        if raw_data is None:
+            st.error(f"⛔ 거래 데이터 조회 실패 (서버 차단됨)")
+            st.caption("해결책: PC에서 실행하거나, 잠시 후 다시 시도해보세요.")
+        elif not raw_data:
+            st.info("데이터가 비어있습니다.")
+        else:
+            df = format_data(raw_data)
+            if not df.empty:
+                # 최신순 정렬
+                df = df.sort_values(by='raw_time', ascending=True)
+                
+                # 최고가 표시
+                max_price = df.iloc[0]['가격']
+                st.metric("최고 매입가", f"{max_price:,} 메소")
+                
+                # 표 출력
+                st.dataframe(
+                    df[['구매자', '가격', '수량', '메시지', '시간']], 
+                    hide_index=True, 
+                    use_container_width=True
+                )
+            else:
+                st.info("현재 '삽니다' 매물이 없습니다.")
 
 if keyword:
     candidates = {name: code for name, code in item_map.items() if keyword.replace(" ", "") in name.replace(" ", "")}
